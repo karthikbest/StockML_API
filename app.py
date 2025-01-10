@@ -45,6 +45,10 @@ def preprocess_data(data, time_steps):
     last_sequence = scaled_data[-time_steps:]
     return np.reshape(last_sequence, (1, time_steps, 1)), scaler
 
+@app.route('/')
+def home():
+    return "Welcome to Stock Price Prediction API. Please refer to API documentation for usage!"
+
 @app.route('/predict', methods=['GET'])
 def predict():
     """

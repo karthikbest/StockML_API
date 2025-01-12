@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import os
 import yfinance as yf
 import numpy as np
@@ -7,6 +8,7 @@ from tensorflow.keras.models import load_model
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Configuration
 MODELS_FOLDER = "models"

@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
-import yfinance as yf
+import requests
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import load_model
@@ -13,27 +13,47 @@ CORS(app)  # Enable CORS for all routes
 # Configuration
 MODELS_FOLDER = "models"
 TIME_STEPS = 60  # Number of time steps for LSTM
+ALPHA_VANTAGE_API_KEY = "L7T0XECYN3RJ2T7D"  # Replace with your actual API key
 
-# Function to fetch stock data
+
+# Function to fetch stock data from Alpha Vantage
 def fetch_stock_data(ticker):
     """
-    Fetch historical stock data for the given ticker.
+    Fetch historical stock data for the given ticker from Alpha Vantage (Free Tier).
     :param ticker: Stock ticker symbol (e.g., "AAPL").
-    :return: DataFrame containing historical stock data.
+    :return: NumPy array containing historical stock data.
     """
-    try:
-        data = yf.download(ticker, period="5y", interval="1d")
-        if data.empty:
-            raise ValueError(f"No data found for ticker '{ticker}'.")
-        return data[["Close"]]
-    except Exception as e:
-        raise ValueError(f"Error fetching data for ticker '{ticker}': {e}")
+    url = "https://www.alphavantage.co/query"
+    params = {
+        "function": "TIME_SERIES_DAILY",  # Use the free version
+        "symbol": ticker,
+        "apikey": ALPHA_VANTAGE_API_KEY,
+        "outputsize": "compact"  # "full" returns all data, "compact" returns last 100 days
+    }
+
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    # Debugging: Print API response to check for issues
+    print("Alpha Vantage Response:", data)
+
+    # Check for errors
+    if "Time Series (Daily)" not in data:
+        error_message = data.get("Note", "Invalid API response. Check API key and ticker symbol.")
+        raise ValueError(f"No data found for ticker '{ticker}'. {error_message}")
+
+    stock_data = data["Time Series (Daily)"]
+    sorted_dates = sorted(stock_data.keys(), reverse=False)  # Ensure chronological order
+    close_prices = [[float(stock_data[date]["4. close"])] for date in sorted_dates]
+
+    return np.array(close_prices), sorted_dates
+
 
 # Function to preprocess data
 def preprocess_data(data, time_steps):
     """
     Prepare the stock data for LSTM prediction.
-    :param data: DataFrame with the "Close" column.
+    :param data: NumPy array with the "Close" column.
     :param time_steps: Number of time steps for LSTM input.
     :return: Tuple of (scaled last sequence, scaler).
     """
@@ -43,13 +63,14 @@ def preprocess_data(data, time_steps):
     if len(scaled_data) < time_steps:
         raise ValueError("Not enough data to create sequences for LSTM input.")
 
-    # Extract the last sequence for prediction
     last_sequence = scaled_data[-time_steps:]
     return np.reshape(last_sequence, (1, time_steps, 1)), scaler
+
 
 @app.route('/')
 def home():
     return "Welcome to Stock Price Prediction API. Please refer to API documentation for usage!"
+
 
 @app.route('/predict', methods=['GET'])
 def predict():
@@ -74,14 +95,10 @@ def predict():
         model = load_model(model_path)
 
         # Fetch historical stock data
-        data = fetch_stock_data(ticker)
-
-        # Check if the data is empty
-        if data.empty:
-            return jsonify({"error": f"No closing price data available for ticker '{ticker}'."}), 400
+        data, dates = fetch_stock_data(ticker)
 
         # Preprocess the data for prediction
-        last_sequence, scaler = preprocess_data(data.values, TIME_STEPS)
+        last_sequence, scaler = preprocess_data(data, TIME_STEPS)
 
         # Predict the next 5 days
         predictions = []
@@ -94,11 +111,13 @@ def predict():
         predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten().tolist()
 
         # Extract the last closing price
-        last_closing_price = float(data["Close"].iloc[-1])
-        last_closing_date = data.index[-1].strftime('%Y-%m-%d')  # Get the date of the last closing price
+        last_closing_price = float(data[-1, 0])
+        last_closing_date = dates[-1]
 
         # Generate future dates for the predicted prices
-        prediction_dates = [(datetime.strptime(last_closing_date, '%Y-%m-%d') + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in range(5)]
+        prediction_dates = [
+            (datetime.strptime(last_closing_date, '%Y-%m-%d') + timedelta(days=i + 1)).strftime('%Y-%m-%d') for i in
+            range(5)]
 
         # Generate a recommendation
         recommendation = "Buy" if predictions[-1] > last_closing_price else "Sell"
@@ -120,6 +139,7 @@ def predict():
         return jsonify({"error": str(ve)}), 400
     except Exception as e:
         return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5001, debug=True)

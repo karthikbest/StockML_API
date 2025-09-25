@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
-import requests
+import yfinance as yf
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import load_model
 from datetime import datetime, timedelta
+import pandas as pd
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -13,40 +14,43 @@ CORS(app)  # Enable CORS for all routes
 # Configuration
 MODELS_FOLDER = "models"
 TIME_STEPS = 60  # Number of time steps for LSTM
-ALPHA_VANTAGE_API_KEY = "L7T0XECYN3RJ2T7D"  # Replace with your actual API key
 
 
-# Function to fetch stock data from Alpha Vantage
+# Function to fetch stock data from YFinance
 def fetch_stock_data(ticker):
     """
-    Fetch historical stock data for the given ticker from Alpha Vantage (Free Tier).
+    Fetch historical stock data for the given ticker from YFinance.
     :param ticker: Stock ticker symbol (e.g., "AAPL").
-    :return: NumPy array containing historical stock data.
+    :return: NumPy array containing historical stock data and dates.
     """
-    url = "https://www.alphavantage.co/query"
-    params = {
-        "function": "TIME_SERIES_DAILY",  # Use the free version
-        "symbol": ticker,
-        "apikey": ALPHA_VANTAGE_API_KEY,
-        "outputsize": "compact"  # "full" returns all data, "compact" returns last 100 days
-    }
-
-    response = requests.get(url, params=params)
-    data = response.json()
-
-    # Debugging: Print API response to check for issues
-    print("Alpha Vantage Response:", data)
-
-    # Check for errors
-    if "Time Series (Daily)" not in data:
-        error_message = data.get("Note", "Invalid API response. Check API key and ticker symbol.")
-        raise ValueError(f"No data found for ticker '{ticker}'. {error_message}")
-
-    stock_data = data["Time Series (Daily)"]
-    sorted_dates = sorted(stock_data.keys(), reverse=False)  # Ensure chronological order
-    close_prices = [[float(stock_data[date]["4. close"])] for date in sorted_dates]
-
-    return np.array(close_prices), sorted_dates
+    try:
+        # Create ticker object
+        stock = yf.Ticker(ticker)
+        
+        # Fetch historical data for the last 100 days (similar to Alpha Vantage compact)
+        # You can adjust the period as needed: "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"
+        hist_data = stock.history(period="3mo")
+        
+        # Check if data was retrieved
+        if hist_data.empty:
+            raise ValueError(f"No data found for ticker '{ticker}'. Please check the ticker symbol.")
+        
+        # Sort by date to ensure chronological order
+        hist_data = hist_data.sort_index()
+        
+        # Extract close prices
+        close_prices = hist_data['Close'].values.reshape(-1, 1)
+        
+        # Get dates in string format
+        sorted_dates = [date.strftime('%Y-%m-%d') for date in hist_data.index]
+        
+        # Debugging: Print data info
+        print(f"YFinance data fetched: {len(close_prices)} days of data for {ticker}")
+        
+        return close_prices, sorted_dates
+        
+    except Exception as e:
+        raise ValueError(f"Error fetching data for ticker '{ticker}': {str(e)}")
 
 
 # Function to preprocess data
